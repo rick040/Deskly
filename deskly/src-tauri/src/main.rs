@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -145,14 +145,91 @@ fn sys_stats(state: tauri::State<Sys>) -> (f32, f32) {
     (cpu, ram)
 }
 
+// ---------- click-through (desktop icons stay usable) ----------
+
+#[derive(Deserialize)]
+struct Rect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+/// Clips the window to the given rects (logical px), so clicks anywhere else fall
+/// through to the desktop. `None` makes the whole window clickable (edit mode).
+#[tauri::command]
+async fn set_hit_area(app: tauri::AppHandle, rects: Option<Vec<Rect>>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let window = app.get_window("main").ok_or("main window missing")?;
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+        let boxes = match rects {
+            None => None,
+            Some(rects) => {
+                let scale = window.scale_factor().map_err(|e| e.to_string())?;
+                let inner = window.inner_position().map_err(|e| e.to_string())?;
+                let outer = window.outer_position().map_err(|e| e.to_string())?;
+                // Window regions are relative to the window frame, not the client area.
+                let (ox, oy) = (inner.x - outer.x, inner.y - outer.y);
+                Some(
+                    rects
+                        .iter()
+                        .map(|r| {
+                            (
+                                ox + (r.x * scale).floor() as i32,
+                                oy + (r.y * scale).floor() as i32,
+                                ox + ((r.x + r.w) * scale).ceil() as i32,
+                                oy + ((r.y + r.h) * scale).ceil() as i32,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        };
+        app.run_on_main_thread(move || set_window_region(hwnd, boxes))
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(windows))]
+    let _ = (app, rects);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_window_region(hwnd: isize, boxes: Option<Vec<(i32, i32, i32, i32)>>) {
+    use windows_sys::Win32::{
+        Foundation::HWND,
+        Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_OR},
+    };
+    let hwnd = hwnd as HWND;
+    unsafe {
+        let Some(boxes) = boxes else {
+            SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
+            return;
+        };
+        let region = CreateRectRgn(0, 0, 0, 0);
+        for (l, t, r, b) in boxes {
+            let part = CreateRectRgn(l, t, r, b);
+            CombineRgn(region, region, part, RGN_OR);
+            DeleteObject(part);
+        }
+        // Windows owns the region after this call, so it must not be deleted here.
+        SetWindowRgn(hwnd, region, 1);
+    }
+}
+
 // ---------- web panels (native child webviews, so Notion etc. work) ----------
+// These commands are async on purpose: creating a webview from a synchronous
+// command deadlocks on Windows (https://github.com/tauri-apps/wry/issues/583).
+
+/// Keeps overlapping `web_set` calls from creating the same webview twice.
+static WEB_LOCK: Mutex<()> = Mutex::new(());
 
 fn web_label(id: &str) -> String {
     format!("web-{id}")
 }
 
 #[tauri::command]
-fn web_set(
+async fn web_set(
     app: tauri::AppHandle,
     id: String,
     url: String,
@@ -161,6 +238,7 @@ fn web_set(
     w: f64,
     h: f64,
 ) -> Result<(), String> {
+    let _guard = WEB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let label = web_label(&id);
     if let Some(wv) = app.get_webview(&label) {
         wv.set_position(LogicalPosition::new(x, y))
@@ -182,7 +260,8 @@ fn web_set(
 }
 
 #[tauri::command]
-fn web_close(app: tauri::AppHandle, id: String) {
+async fn web_close(app: tauri::AppHandle, id: String) {
+    let _guard = WEB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(wv) = app.get_webview(&web_label(&id)) {
         let _ = wv.close();
     }
@@ -190,7 +269,7 @@ fn web_close(app: tauri::AppHandle, id: String) {
 
 /// Native views always draw above the page, so hide them while a dialog is open.
 #[tauri::command]
-fn web_hide_all(app: tauri::AppHandle, hidden: bool) {
+async fn web_hide_all(app: tauri::AppHandle, hidden: bool) {
     for (label, wv) in app.webviews() {
         if label.starts_with("web-") {
             let _ = if hidden { wv.hide() } else { wv.show() };
@@ -208,6 +287,7 @@ fn main() {
             get_icon,
             launch,
             sys_stats,
+            set_hit_area,
             web_set,
             web_close,
             web_hide_all

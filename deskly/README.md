@@ -4,6 +4,7 @@ A tiny desktop layer for Windows: fences (app groups), minimal widgets, and live
 
 ## Use it
 - It sits behind your windows like wallpaper. Tray icon (bottom right) > **Edit layout**, or the faint gear in the bottom-right corner.
+- Outside edit mode, clicks next to the panels go straight to your desktop icons. In edit mode Deskly takes the whole screen until you press **Done**.
 - In edit mode: drag a header to move, drag the corner to resize, top bar adds fences/widgets, `+` in a fence picks installed apps, you can also drag files/shortcuts from Explorer into a fence.
 - Click an item (outside edit mode) to launch it. Tray icon > **Quit Deskly** to close.
 - Layout is saved automatically in `%APPDATA%\app.deskly.desktop\layout.json`.
