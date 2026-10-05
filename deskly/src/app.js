@@ -309,6 +309,25 @@
     });
   }
 
+  // ---------- click-through ----------
+  // Outside edit mode only the panels and the gear catch the mouse; everywhere else
+  // clicks fall through to the desktop icons underneath. Calls are chained so an
+  // older region can never land after a newer one.
+  let hitQ = false;
+  let hitChain = Promise.resolve();
+  function syncHit() {
+    if (hitQ) return;
+    hitQ = true;
+    requestAnimationFrame(() => {
+      hitQ = false;
+      const rects = edit ? null : [...stage.querySelectorAll('.panel'), document.getElementById('gear')].map((e) => {
+        const r = e.getBoundingClientRect();
+        return { x: r.left, y: r.top, w: r.width, h: r.height };
+      });
+      hitChain = hitChain.then(() => invoke('set_hit_area', { rects })).catch(() => {});
+    });
+  }
+
   // ---------- render ----------
   function render() {
     timers.forEach(clearInterval); timers = [];
@@ -322,6 +341,7 @@
     webIds.forEach((id) => { if (!live.has(id)) invoke('web_close', { id }); });
     webIds = live;
     syncWeb();
+    syncHit();
   }
 
   function setEdit(v) { edit = v; render(); }
@@ -362,7 +382,7 @@
     document.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => addPanel(b.dataset.add); });
     document.getElementById('done').onclick = () => setEdit(false);
     document.getElementById('gear').onclick = () => setEdit(true);
-    addEventListener('resize', syncWeb);
+    addEventListener('resize', () => { syncWeb(); syncHit(); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && edit && modalEl.hidden) setEdit(false); });
 
     if (T) {
