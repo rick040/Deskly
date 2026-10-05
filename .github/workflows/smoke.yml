@@ -45,6 +45,7 @@ jobs:
             [DllImport("user32.dll")] public static extern int GetWindowRgn(IntPtr h, IntPtr r);
             [DllImport("gdi32.dll")] public static extern IntPtr CreateRectRgn(int a, int b, int c, int d);
             [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
             public static string Cls(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
           }
           "@
@@ -54,7 +55,13 @@ jobs:
             Set-Content -NoNewline (Join-Path $dir 'layout.json')
           $p = Start-Process -FilePath src-tauri\target\release\deskly.exe -PassThru
           Start-Sleep 25
-          $h = [W]::FindWindow($null, 'Deskly')
+          # Minimize the runner's terminal, which otherwise covers the desktop layer.
+          $t = [W]::FindWindow('CASCADIA_HOSTING_WINDOW_CLASS', [NullString]::Value)
+          "terminal: $t"
+          if ($t -ne [IntPtr]::Zero) { [void][W]::ShowWindow($t, 6) }
+          Start-Sleep 2
+          $h = [W]::FindWindow([NullString]::Value, 'Deskly')
+          Get-Process -Id $p.Id | Format-List Id, Responding, MainWindowTitle | Out-String | Write-Host
           "screen: $([System.Windows.Forms.Screen]::PrimaryScreen.Bounds)  window: $h  exited: $($p.HasExited)"
           $r = [IntPtr]::Zero
           $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r) -ne [IntPtr]::Zero
