@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deskly</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="toolbar" hidden>
+  <span class="lbl">Add</span>
+  <button data-add="fence">Fence</button>
+  <button data-add="clock">Clock</button>
+  <button data-add="notes">Notes</button>
+  <button data-add="todo">To-do</button>
+  <button data-add="stats">Stats</button>
+  <button data-add="web">Web page</button>
+  <span class="sep"></span>
+  <span class="lbl">Accent</span>
+  <span id="swatches"></span>
+  <span class="sep"></span>
+  <button id="done" class="primary">Done</button>
+</div>
+
+<button id="gear" title="Edit layout">&#9881;</button>
+<div id="modal" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
