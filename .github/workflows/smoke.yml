@@ -1,0 +1,90 @@
+name: Smoke test (temporary)
+on:
+  push:
+    branches: [claude/quirky-bohr-tj3jp2]
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [fixed, before]
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: deskly
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Use the code from before the fix
+        if: matrix.variant == 'before'
+        run: git checkout c68d72c7dcd586a846fe511f3cc28caef976247f -- src src-tauri/src src-tauri/Cargo.toml
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: deskly/src-tauri, save-if: false }
+      - run: npm install
+      - run: npx tauri build --no-bundle
+      - name: Launch Deskly and probe it
+        shell: pwsh
+        env: { VARIANT: '${{ matrix.variant }}' }
+        run: |
+          Add-Type -AssemblyName System.Drawing, System.Windows.Forms
+          Add-Type @"
+          using System;
+          using System.Text;
+          using System.Runtime.InteropServices;
+          public static class W {
+            [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t);
+            [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+            [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
+            [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+            [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr h);
+            [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
+            [DllImport("user32.dll")] public static extern int GetWindowRgn(IntPtr h, IntPtr r);
+            [DllImport("gdi32.dll")] public static extern IntPtr CreateRectRgn(int a, int b, int c, int d);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            public static string Cls(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
+          }
+          "@
+          $dir = Join-Path $env:APPDATA 'app.deskly.desktop'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          '{"accent":"#7c9cff","panels":[{"id":"clk","type":"clock","x":40,"y":40,"w":300,"h":140},{"id":"web1","type":"web","url":"https://example.com","x":400,"y":100,"w":520,"h":440}]}' |
+            Set-Content -NoNewline (Join-Path $dir 'layout.json')
+          $p = Start-Process -FilePath src-tauri\target\release\deskly.exe -PassThru
+          Start-Sleep 25
+          $h = [W]::FindWindow($null, 'Deskly')
+          "screen: $([System.Windows.Forms.Screen]::PrimaryScreen.Bounds)  window: $h  exited: $($p.HasExited)"
+          $r = [IntPtr]::Zero
+          $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r) -ne [IntPtr]::Zero
+          $hung = [W]::IsHungAppWindow($h)
+          $rgnType = [W]::GetWindowRgn($h, [W]::CreateRectRgn(0, 0, 0, 0))
+          function Probe($x, $y) {
+            $pt = New-Object W+POINT; $pt.X = $x; $pt.Y = $y
+            [void][W]::ClientToScreen($h, [ref]$pt)
+            $c = [W]::WindowFromPoint($pt)
+            $root = [W]::GetAncestor($c, 2)
+            [pscustomobject]@{ at = "$x,$y"; hit = $c; class = [W]::Cls($c); deskly = ($root -eq $h) }
+          }
+          $clock = Probe 150 110
+          $web = Probe 650 300
+          $empty = Probe 200 650
+          $clock, $web, $empty | Format-Table | Out-String | Write-Host
+          "responsive: $ok  hung: $hung  region type: $rgnType (0 = none, 2/3 = clipped)"
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          try {
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("$PWD\shot-$env:VARIANT.png")
+          } catch { "screenshot failed: $_" }
+          $pass = $ok -and -not $hung -and $clock.deskly -and $web.deskly -and -not $empty.deskly -and ($web.hit -ne $clock.hit)
+          "RESULT ${env:VARIANT}: $(if ($pass) { 'PASS' } else { 'FAIL' })"
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if ($env:VARIANT -eq 'fixed' -and -not $pass) { exit 1 }
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shot-${{ matrix.variant }}
+          path: deskly/shot-*.png
